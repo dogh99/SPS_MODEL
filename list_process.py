@@ -1,10 +1,13 @@
-# -*- coding: utf-8 -*-
 """
-Created on Mon Dec 26 16:41:20 2022
-
-@author: xin
+list_process.py 存放列表处理的通用函数
 """
-
-def transfer_2Dlist_to_1Dlist(orignal_list):
-    transferred_list = [n for a in orignal_list for n in a ]
-    return transferred_list
+def transfer_2Dlist_to_1Dlist(two_d_list):
+    """
+    将二维列表拍平成一维列表
+    输入: [[a,b],[c,d]]  输出: [a,b,c,d]
+    """
+    flat = []
+    for sublist in two_d_list:
+        for item in sublist:
+            flat.append(item)
+    return flat

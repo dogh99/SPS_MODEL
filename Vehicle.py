@@ -1,8 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-Created on Wed Jan 11 18:36:52 2023
-
-@author: xin
+Vehicle.py 定义车辆对象，包含位置、功率、资源选择、感知、消息收发与统计等功能
 """
 
 import math
@@ -14,24 +11,38 @@ from list_process import transfer_2Dlist_to_1Dlist
 from RBG import RGBs_set
 
 
-# =============================================================================
-#     v_RBG is the observed suhchannel, 
-#     the function "sense_single_RBG" is to get the sum power received by the object vehicle.
-#     if the observed slot is used by object vehicle, return "False"
-# =============================================================================
-
 
 class Vehicle():
     
     def __init__(self, index, location, power, p_resource_keeping,RCrange,target_distance):
+        # 唯一车辆标识 (SUMO ID 或编号)
         self.index = index
+        # 当前坐标 (x,y)
         self.location = location
+        # 发射功率 (mW)
+        self.power = power
+        # 资源保持概率
+        self.p_resource_keeping = p_resource_keeping
+        # RC 重选计数器范围
+        self.RCrange = RCrange
+        # RC 计数器初始值
+        self.reselection_counter = random.randint(*RCrange)
+        # 目标通信距离
+        self.target_distance = target_distance
+
+        # 用于感知和统计的属性初始化
+        self.message_list = []
+        self.v_RBG = None
+        self.neighbour_list = []
+        self.sensepower_1100ms = {}
+        self.prepower_in_selection_window = {}
+        self.num_tran = 0
+        self.num_rec = 0
         self.v_RBG = None
         self.v_em_RBGs_set = []
         self.v_em_RBGs_multiple = []
         self.choose_RBGs_multiple = []
         self.message_list = None
-        self.power = power
         self.sensepower_1100ms = {}
         self.sensingpower_current_slot = {}
         self.RBGlist_1100ms = []
@@ -41,12 +52,8 @@ class Vehicle():
         self.best_RBG_list_beacon = []
         self.neighbour_list = []
         self.transmission_statistic = []
-        self.target_distance = target_distance
         self.reselection_counter = random.randint(RCrange[0], RCrange[1])
         self.RBGs_in_selection_window = []
-        self.num_tran = 0
-        self.num_rec = 0
-        self.p_resource_keeping = p_resource_keeping
         self.RSRP_th = -110.35564074964655
         self.max_upper_bound = 0
         self.n_sample = 0        
@@ -70,7 +77,11 @@ class Vehicle():
         
         
     def initial_RBGs_selection(self,RBG_list,interval):
-        self.v_RBG = random.choice(transfer_2Dlist_to_1Dlist(RBG_list[:interval]))
+        """
+        首次随机选一个 RBG，避免 v_RBG 为空
+        """
+        cand = transfer_2Dlist_to_1Dlist(RBG_list[:interval])
+        self.v_RBG = random.choice(cand)
 
     def initial_RBGs_selection_em(self,RBG_list):
         #self.v_em_RBG = RGBs_set(0,[0,1])
@@ -82,16 +93,21 @@ class Vehicle():
         self.RBGlist_in_slot = RBG_list[current_time]
     
     def update_reselection_counter(self,current_time,interval,RCrange):
-        if current_time % (int(interval)) == 0:
+        """
+        每隔 interval 时隙递减 RC 计数器，
+        小于 0 时从 RCrange 随机重置
+        """
+        if current_time % interval == 0:
             self.reselection_counter -= 1
             if self.reselection_counter < 0:
-                self.reselection_counter = random.randint(RCrange[0],RCrange[1])
+                self.reselection_counter = random.randint(*RCrange)
     
     def generate_RBGlist_1100ms(self,current_time, RBG_list, sensing_window):
-        if current_time>=sensing_window:
-            self.RBGlist_1100ms = RBG_list[current_time-sensing_window:current_time]
-        else:
-            self.RBGlist_1100ms = RBG_list[:current_time]
+        """
+        保存最近 sensing_window 时隙的 RBG 分配历史
+        """
+        start = max(0, current_time - sensing_window)
+        self.RBGlist_1100ms = RBG_list[start:current_time]
 
             
         
@@ -107,15 +123,20 @@ class Vehicle():
         
     def update_RBG(self,newv_RBG):
         self.v_RBG = newv_RBG
-    
+
+ #初始化车辆的消息列表,长度为仿真时隙总数,每个元素初始为none   
     def message_list_ini(self,time_period):
-        self.message_list = [None]*time_period
-        
+        """初始化消息列表，长度为总时隙，默认 None"""
+        self.message_list = [None] * time_period
+
+ #按照给定的发送间隔,为每辆车在对应时隙生成一个beacon信标消息对象       
     def generate_beacon(self,interval,mdelay,time_period):
-        for i in range(0,int(time_period/interval)):
-            if int(i*interval) >= time_period:
-                break
-            self.message_list[int(i*interval)] = Beacon(0, mdelay, int(i*interval), None, interval)
+        """
+        按发送间隔 interval，在 message_list 中插入 Beacon 对象
+        """
+        for i in range(0, time_period, interval):
+            if i < time_period:
+                self.message_list[i] = Beacon(0, mdelay, i, None, rate=1)
 
 
     def genearate_vehicles(num_vehicle, num_slot, vehicle_location, transmit_power):
@@ -177,16 +198,26 @@ class Vehicle():
         self.sensepower_1100ms.update(self.sensingpower_current_slot)
     
     def update_sensing_result(self, current_time, vehicles, RBG_list, sensing_window):
+        """
+        执行感知：清理过期、加入当前感知、计算 window 内平均功率
+        """
         self.remove_outofdate_sensing(current_time, RBG_list,sensing_window)
         self.add_uptodate_sensing(current_time, vehicles, RBG_list)
+        # 计算每个观察到的 RBG 的平均接收功率
+        for RB in self.prepower_in_selection_window.keys():
+            self.evaluate_average_power(RB, self.channel)
         
-    def evaluate_average_power(self,observed_RBG, channel):
-        sum_power_list = []
-        RBGlist_1100ms_temp=transfer_2Dlist_to_1Dlist(self.RBGlist_1100ms)
-        for RB in RBGlist_1100ms_temp:
-            if RB.subchannel == observed_RBG.subchannel and (observed_RBG.timeslot - RB.timeslot)%(channel.interval) == 0:  
-                sum_power_list.append(self.sensepower_1100ms[RB])
-        self.prepower_in_selection_window[observed_RBG] = np.average(sum_power_list)
+    def evaluate_average_power(self, observed_RBG, channel):
+        """
+        对观测到的 RBG 在 sensing window 内同子信道的时隙取平均功率
+        """
+        temps = []
+        all_hist = transfer_2Dlist_to_1Dlist(self.RBGlist_1100ms)
+        for rb in all_hist:
+            if rb.subchannel == observed_RBG.subchannel and \
+               (observed_RBG.timeslot - rb.timeslot) % channel.interval == 0:
+                temps.append(self.sensepower_1100ms.get(rb, 0))
+        self.prepower_in_selection_window[observed_RBG] = np.mean(temps) if temps else 0
 
     def evaluate_power_in_selection_window(self, channel):
         self.prepower_in_selection_window={}
@@ -219,7 +250,7 @@ class Vehicle():
         vehicles_copy = copy.copy(vehicles)
         vehicles_copy.remove(self)
         for vehicle in vehicles_copy:
-            if self.distance(vehicle)<=self.target_distance:
+            if self.distance(vehicle)<=self.target_distance:#将targent_distance里的车辆加入到邻居车辆集中
                 self.neighbour_list.append(vehicle)
                                 
     def sum_interference_power(self,receive_vehicle,vehicles):
@@ -293,4 +324,4 @@ class Vehicle():
             self.transmission_statistic.append(None)
         else:
             self.transmission_statistic.append(reception/num_packet)
-        
+
